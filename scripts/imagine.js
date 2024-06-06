@@ -10,7 +10,7 @@ module.exports = {
         usePrefix: true
     },
 
-    onStart: async function ({ bot, chatId, args }) {
+    annieStart: async function ({ bot, chatId, args }) {
         const prompt = args.join(' ');
         if (!prompt) {
             bot.sendMessage(chatId, "Please provide a prompt.");
