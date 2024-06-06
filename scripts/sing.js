@@ -6,22 +6,13 @@ const fs = require("fs-extra");
 module.exports = {
   config: {
     name: "sing",
-    aliases: ["song"],
     version: "2.0",
     author: "Abdul Kaiyum",
     category: "music",
-    shortDescription: {
-      en: "Play songs, get lyrics, and manage a playlist.",
-    },
-    longDescription: {
-      en: "Play songs by name, fetch lyrics, or manage a playlist.",
-    },
-    guide: {
-      en: "/sing <song name>\n/sing playlist -a <song name>\n/sing playlist -p <index>\n/sing lyrics <song name>\n\nTo play a song from your playlist, use '/sing playlist play [number]'.",
-    },
+    role: 0,
   },
 
-  async onStart({ bot, msg, match }) {
+  annieStart: async function({ bot, msg, match }) {
     const chatId = msg.chat.id;
     const query = match[1];
 
