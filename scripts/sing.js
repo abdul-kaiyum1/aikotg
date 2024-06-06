@@ -2,7 +2,6 @@ const axios = require("axios");
 const ytdl = require("@neoxr/ytdl-core");
 const yts = require("yt-search");
 const fs = require("fs-extra");
-const { Markup } = require('telegraf');
 
 module.exports = {
   config: {
