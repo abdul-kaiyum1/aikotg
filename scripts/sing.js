@@ -1,93 +1,159 @@
-const fs = require("fs-extra");
 const axios = require("axios");
 const ytdl = require("@neoxr/ytdl-core");
 const yts = require("yt-search");
-const { shorten } = require('tinyurl');
+const fs = require("fs-extra");
+const { Markup } = require('telegraf');
 
 module.exports = {
-    config: {
-        name: "sing",
-        version: "1.0",
-        author: "JARiF",
-        category: "MEDIA",
-        role: 0,
+  config: {
+    name: "sing",
+    aliases: ["song"],
+    version: "2.0",
+    author: "Abdul Kaiyum",
+    category: "music",
+    shortDescription: {
+      en: "Play songs, get lyrics, and manage a playlist.",
     },
-    annieStart: async function({ bot, msg, match }) {
-        try {
-            let songName;
-            const replyToMessage = msg.reply_to_message;
+    longDescription: {
+      en: "Play songs by name, fetch lyrics, or manage a playlist.",
+    },
+    guide: {
+      en: "/sing <song name>\n/sing playlist -a <song name>\n/sing playlist -p <index>\n/sing lyrics <song name>\n\nTo play a song from your playlist, use '/sing playlist play [number]'.",
+    },
+  },
 
-            if (replyToMessage && (replyToMessage.audio || replyToMessage.video)) {
-                let attachmentUrl;
-                if (replyToMessage.audio) {
-                    attachmentUrl = await bot.getFileLink(replyToMessage.audio.file_id);
-                } else {
-                    attachmentUrl = await bot.getFileLink(replyToMessage.video.file_id);
-                }
-                const shortUrl = await shorten(attachmentUrl);
-                const response = await axios.get(`https://www.api.vyturex.com/songr?url=${shortUrl}`);
-                songName = response.data.title;
+  async onStart({ bot, msg, match }) {
+    const chatId = msg.chat.id;
+    const query = match[1];
 
-                if (!songName) {
-                    await bot.sendMessage(msg.chat.id, "Error: Failed to get song name from the provided file.");
-                    return;
-                }
-            } else {
-                songName = msg.text.split(' ').slice(1).join(' ');
-                if (!songName) {
-                    await bot.sendMessage(msg.chat.id, "❌ Please provide a song name or keywords to search, or reply to an audio or video file.");
-                    return;
-                }
-            }
-
-            const chatId = msg.chat.id;
-            const searchingMessage = await bot.sendMessage(chatId, `⏳ | Searching Music "${songName}"`);
-
-            const searchResults = await yts(songName);
-            if (!searchResults.videos.length) {
-                await bot.sendMessage(chatId, "Error: No search results found.");
-                await bot.deleteMessage(chatId, searchingMessage.message_id);
-                return;
-            }
-
-            const video = searchResults.videos[0];
-            const videoUrl = video.url;
-
-            const stream = ytdl(videoUrl, { filter: "audioonly" });
-            const fileName = `${video.title}.mp3`;
-            const filePath = `./scripts/tmp/${fileName}`;
-
-            const writeStream = fs.createWriteStream(filePath);
-            stream.pipe(writeStream);
-
-            writeStream.on('finish', async () => {
-                console.info('[DOWNLOADER] Downloaded');
-
-                if (fs.statSync(filePath).size > 26214400) {
-                    fs.unlinkSync(filePath);
-                    await bot.sendMessage(chatId, '[ERR] The file could not be sent because it is larger than 25MB.');
-                } else {
-                    const caption = `Title: ${video.title}\nArtist: ${video.author.name}`;
-                    const audio = fs.createReadStream(filePath);
-
-                    await bot.sendAudio(chatId, audio, { caption });
-                }
-
-                writeStream.close();
-
-                await bot.deleteMessage(chatId, searchingMessage.message_id);
-            });
-
-            writeStream.on('error', async (error) => {
-                console.error('[WRITE STREAM ERROR]', error);
-                await bot.sendMessage(chatId, '[ERR] Failed to write audio file.');
-                await bot.deleteMessage(chatId, searchingMessage.message_id);
-            });
-
-        } catch (error) {
-            console.error('[ERROR]', error);
-            await bot.sendMessage(msg.chat.id, 'Error');
+    try {
+      if (query.toLowerCase() === "playlist") {
+        // Display playlist options
+        await this.showPlaylistOptions(bot, chatId);
+      } else if (query.toLowerCase().startsWith("lyrics")) {
+        // Fetch lyrics
+        const songName = query.slice(7).trim();
+        if (!songName) {
+          return bot.sendMessage(chatId, "Please provide a song name for lyrics.");
         }
-    }
-}
+        await this.fetchLyrics(bot, chatId, songName);
+      } else {
+        // Search for the song
+        const searchResults = await yts(query);
+        if (searchResults.videos.length === 0) {
+          return bot.sendMessage(chatId, "❌ No videos found for that song.");
+        }
 
+        const buttons = searchResults.videos.map((video, index) => ({
+          text: `${index + 1}. ${video.title}`,
+          callback_data: JSON.stringify({ action: 'select_track', index })
+        }));
+
+        await bot.sendMessage(chatId, "Select a video:", {
+          reply_markup: {
+            inline_keyboard: buttons.map(button => [button])
+          }
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      bot.sendMessage(chatId, "❌ An error occurred while processing your request.");
+    }
+  },
+
+  async selectTrack({ bot, msg, match }) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id; 
+    const { index } = match;
+
+    try {
+      const searchResults = await yts(match[1]);
+      if (searchResults.videos.length === 0) {
+        return bot.sendMessage(chatId, "❌ No videos found for that song.");
+      }
+
+      const video = searchResults.videos[index];
+      const videoUrl = video.url;
+
+      const stream = ytdl(videoUrl, { filter: "audioonly" });
+      const fileName = `${video.title}.mp3`;
+      const filePath = `./cache/${fileName}`;
+
+      const writeStream = fs.createWriteStream(filePath);
+      stream.pipe(writeStream);
+
+      writeStream.on('finish', async () => {
+        const fileStats = fs.statSync(filePath);
+        if (fileStats.size > 25 * 1024 * 1024) {
+          fs.unlinkSync(filePath);
+          return bot.sendMessage(chatId, "❌ The song is too large to send (>25MB).");
+        }
+
+        const caption = `Title: ${video.title}\nDuration: ${video.timestamp}\nYouTube Link: ${videoUrl}`;
+        const audio = fs.createReadStream(filePath);
+
+        await bot.sendAudio(chatId, audio, { caption });
+
+        fs.unlinkSync(filePath);
+      });
+
+      writeStream.on('error', async (error) => {
+        console.error('[WRITE STREAM ERROR]', error);
+        await bot.sendMessage(chatId, '❌ Failed to write audio file.');
+      });
+    } catch (error) {
+      console.error(error);
+      await bot.sendMessage(chatId, "❌ An error occurred while processing the selected track.");
+    }
+  },
+
+  async showPlaylistOptions(bot, chatId) {
+    try {
+      const playlists = await this.getPlaylists();
+      const userPlaylist = playlists[chatId] || [];
+
+      if (userPlaylist.length === 0) {
+        return bot.sendMessage(chatId, "Your playlist is empty.");
+      }
+
+      const buttons = userPlaylist.map((track, index) => ({
+        text: `${index + 1}. ${track}`,
+        callback_data: JSON.stringify({ action: 'play_playlist_track', index })
+      }));
+
+      await bot.sendMessage(chatId, "Select a track from your playlist:", {
+        reply_markup: {
+          inline_keyboard: buttons.map(button => [button])
+        }
+      });
+    } catch (error) {
+      console.error(error);
+      bot.sendMessage(chatId, "❌ An error occurred while fetching your playlist.");
+    }
+  },
+
+  async getPlaylists() {
+    try {
+      const playlistsData = await fs.readFile("playlists.json", "utf8");
+      return JSON.parse(playlistsData);
+    } catch (error) {
+      return {};
+    }
+  },
+
+  async fetchLyrics(bot, chatId, songName) {
+    try {
+      const apiUrl = `https://lyrist-woad.vercel.app/api/${encodeURIComponent(songName)}`;
+      const response = await axios.get(apiUrl);
+
+      if (response.data.lyrics) {
+        await bot.sendMessage(chatId, `🎵 Lyrics for "${response.data.title}" by ${response.data.artist}:\n\n${response.data.lyrics}`);
+      } else {
+        await bot.sendMessage(chatId, "❌ No lyrics found for that song.");
+      }
+    } catch (error) {
+      console.error("Error fetching lyrics:", error);
+      await bot.sendMessage(chatId, "❌ An error occurred while fetching the lyrics.");
+    }
+  },
+};
